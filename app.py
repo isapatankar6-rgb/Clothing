@@ -4,29 +4,36 @@ import cv2
 import numpy as np
 import streamlit as st
 
+# Path to save the XML locally on the server
+CASCADE_PATH = "haarcascade_frontalface_default.xml"
 
-@st.cache_resource
-def load_cascade():
-    """Ensure cascade XML file is available locally."""
-    cascade_filename = "haarcascade_frontalface_default.xml"
 
-    # Check OpenCV builtin path first
-    builtin_path = os.path.join(cv2.data.haarcascades, cascade_filename)
-    if os.path.exists(builtin_path):
-        return cv2.CascadeClassifier(builtin_path)
-
-    # Fallback: Download directly if missing in cloud container
-    if not os.path.exists(cascade_filename):
+def get_face_cascade():
+    """Download and return the Haar cascade classifier directly."""
+    if not os.path.exists(CASCADE_PATH):
         url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
-        urllib.request.urlretrieve(url, cascade_filename)
+        # Download XML directly to root folder
+        urllib.request.urlretrieve(url, CASCADE_PATH)
 
-    return cv2.CascadeClassifier(cascade_filename)
+    classifier = cv2.CascadeClassifier(CASCADE_PATH)
+    if classifier.empty():
+        # Fallback to OpenCV built-in if available
+        builtin_path = os.path.join(
+            cv2.data.haarcascades, "haarcascade_frontalface_default.xml"
+        )
+        classifier = cv2.CascadeClassifier(builtin_path)
+
+    return classifier
 
 
 def get_face_landmarks(img):
     """Detect face region and generate keypoints for triangulation."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    face_cascade = load_cascade()
+    face_cascade = get_face_cascade()
+
+    if face_cascade.empty():
+        st.error("Error loading face detection model file.")
+        return None, None
 
     faces = face_cascade.detectMultiScale(
         gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
