@@ -1,15 +1,33 @@
+import os
+import urllib.request
 import cv2
 import numpy as np
 import streamlit as st
 
 
+@st.cache_resource
+def load_cascade():
+    """Ensure cascade XML file is available locally."""
+    cascade_filename = "haarcascade_frontalface_default.xml"
+
+    # Check OpenCV builtin path first
+    builtin_path = os.path.join(cv2.data.haarcascades, cascade_filename)
+    if os.path.exists(builtin_path):
+        return cv2.CascadeClassifier(builtin_path)
+
+    # Fallback: Download directly if missing in cloud container
+    if not os.path.exists(cascade_filename):
+        url = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
+        urllib.request.urlretrieve(url, cascade_filename)
+
+    return cv2.CascadeClassifier(cascade_filename)
+
+
 def get_face_landmarks(img):
     """Detect face region and generate keypoints for triangulation."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    face_cascade = load_cascade()
 
-    # Use OpenCV's built-in Haar Cascade detector
-    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    face_cascade = cv2.CascadeClassifier(cascade_path)
     faces = face_cascade.detectMultiScale(
         gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
     )
@@ -20,7 +38,7 @@ def get_face_landmarks(img):
     # Get primary face bounding box
     x, y, w, h = faces[0]
 
-    # Generate synthetic landmark boundary points across the face box
+    # Synthetic landmark boundary points
     landmarks = np.array(
         [
             [x, y],
@@ -67,7 +85,7 @@ def swap_faces(src_img, tgt_img):
     # Center coordinates where the source face will be placed on target
     center_tgt = (tx + tw // 2, ty + th // 2)
 
-    # Perform Poisson Seamless Cloning (blends color & lighting automatically)
+    # Perform Poisson Seamless Cloning
     output = cv2.seamlessClone(
         src_face_resized, tgt_img, mask, center_tgt, cv2.NORMAL_CLONE
     )
@@ -102,7 +120,7 @@ with col2:
 
 if st.button("Swap Face", type="primary"):
     if face_file is not None and body_file is not None:
-        # Convert uploaded bytes to OpenCV image format (BGR)
+        # Convert uploaded bytes to OpenCV image format
         face_bytes = np.asarray(bytearray(face_file.read()), dtype=np.uint8)
         body_bytes = np.asarray(bytearray(body_file.read()), dtype=np.uint8)
 
