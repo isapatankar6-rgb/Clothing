@@ -1,152 +1,126 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pure JS Client-Side Face Swap</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
-    body { background: #0f172a; color: #f8fafc; padding: 2rem; }
-    .container { max-width: 900px; margin: 0 auto; background: #1e293b; padding: 1.5rem; border-radius: 12px; }
-    h1 { margin-bottom: 1rem; text-align: center; }
-    
-    .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
-    .box { border: 2px dashed #3b82f6; border-radius: 8px; padding: 1rem; text-align: center; background: #0f172a; }
-    .box input { display: none; }
-    .box label { cursor: pointer; display: block; font-weight: bold; padding: 0.5rem; }
-    .preview { max-width: 100%; max-height: 200px; margin-top: 0.5rem; border-radius: 6px; display: none; }
+import cv2
+import numpy as np
+import streamlit as st
 
-    button { width: 100%; padding: 0.8rem; background: #2563eb; color: white; border: none; border-radius: 6px; font-size: 1rem; font-weight: bold; cursor: pointer; }
-    button:hover { background: #1d4ed8; }
 
-    .result-container { margin-top: 1.5rem; text-align: center; }
-    canvas { max-width: 100%; border-radius: 8px; background: #000; margin-top: 1rem; }
-  </style>
-  
-  <!-- Load TensorFlow.js and Face-API.js directly from CDN -->
-  <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
-</head>
-<body>
+def get_face_landmarks(img):
+    """Detect face region and generate keypoints for triangulation."""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-  <div class="container">
-    <h1>Client-Side Face Swap</h1>
+    # Use OpenCV's built-in Haar Cascade detector
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    face_cascade = cv2.CascadeClassifier(cascade_path)
+    faces = face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30)
+    )
 
-    <div class="upload-grid">
-      <div class="box">
-        <label for="faceInput">1. Upload Face Image</label>
-        <input type="file" id="faceInput" accept="image/*" />
-        <img id="faceImg" class="preview" alt="Face Preview" />
-      </div>
+    if len(faces) == 0:
+        return None, None
 
-      <div class="box">
-        <label for="bodyInput">2. Upload Body/Clothing Image</label>
-        <input type="file" id="bodyInput" accept="image/*" />
-        <img id="bodyImg" class="preview" alt="Body Preview" />
-      </div>
-    </div>
+    # Get primary face bounding box
+    x, y, w, h = faces[0]
 
-    <button id="swapBtn">Swap Face onto Body</button>
+    # Generate synthetic landmark boundary points across the face box
+    landmarks = np.array(
+        [
+            [x, y],
+            [x + w // 2, y],
+            [x + w, y],
+            [x + w, y + h // 2],
+            [x + w, y + h],
+            [x + w // 2, y + h],
+            [x, y + h],
+            [x, y + h // 2],
+            [x + w // 4, y + h // 4],
+            [x + 3 * w // 4, y + h // 4],
+            [x + w // 2, y + h // 2],
+            [x + w // 3, y + 3 * h // 4],
+            [x + 2 * w // 3, y + 3 * h // 4],
+        ],
+        dtype=np.int32,
+    )
 
-    <div class="result-container">
-      <h3>Result:</h3>
-      <canvas id="outputCanvas"></canvas>
-    </div>
-  </div>
+    return (x, y, w, h), landmarks
 
-  <script>
-    const faceInput = document.getElementById('faceInput');
-    const bodyInput = document.getElementById('bodyInput');
-    const faceImg = document.getElementById('faceImg');
-    const bodyImg = document.getElementById('bodyImg');
-    const swapBtn = document.getElementById('swapBtn');
-    const canvas = document.getElementById('outputCanvas');
-    const ctx = canvas.getContext('2d');
 
-    // Handle local image previews
-    function setupPreview(input, imgElement) {
-      input.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (file) {
-          imgElement.src = URL.createObjectURL(file);
-          imgElement.style.display = 'block';
-        }
-      });
-    }
+def swap_faces(src_img, tgt_img):
+    """Swap source face onto target body using OpenCV seamless cloning."""
+    src_rect, src_pts = get_face_landmarks(src_img)
+    tgt_rect, tgt_pts = get_face_landmarks(tgt_img)
 
-    setupPreview(faceInput, faceImg);
-    setupPreview(bodyInput, bodyImg);
+    if src_rect is None or tgt_rect is None:
+        return None
 
-    // Initialize models from CDN
-    async function loadModels() {
-      const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-      await faceapi.nets.faceLandmark64Net.loadFromUri(MODEL_URL);
-    }
+    tx, ty, tw, th = tgt_rect
+    sx, sy, sw, sh = src_rect
 
-    loadModels();
+    # Extract source face region and resize to target face size
+    src_face = src_img[sy : sy + sh, sx : sx + sw]
+    src_face_resized = cv2.resize(src_face, (tw, th))
 
-    // Perform geometric face swap onto target canvas
-    swapBtn.addEventListener('click', async () => {
-      if (!faceImg.src || !bodyImg.src) {
-        alert("Please upload both a face image and a body image first!");
-        return;
-      }
+    # Create an elliptical mask for smooth face shape
+    mask = np.zeros((th, tw), dtype=np.uint8)
+    center = (tw // 2, th // 2)
+    axes = (tw // 2 - 2, th // 2 - 2)
+    cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
 
-      swapBtn.innerText = "Processing...";
+    # Center coordinates where the source face will be placed on target
+    center_tgt = (tx + tw // 2, ty + th // 2)
 
-      // Detect face and landmarks on source (Face Image)
-      const faceResult = await faceapi.detectSingleFace(faceImg, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
-      // Detect face and landmarks on target (Body Image)
-      const bodyResult = await faceapi.detectSingleFace(bodyImg, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
+    # Perform Poisson Seamless Cloning (blends color & lighting automatically)
+    output = cv2.seamlessClone(
+        src_face_resized, tgt_img, mask, center_tgt, cv2.NORMAL_CLONE
+    )
 
-      if (!faceResult || !bodyResult) {
-        alert("Could not detect clear faces in one or both images. Try clearer photos.");
-        swapBtn.innerText = "Swap Face onto Body";
-        return;
-      }
+    return output
 
-      // Set canvas dimensions to target body image dimensions
-      canvas.width = bodyImg.naturalWidth;
-      canvas.height = bodyImg.naturalHeight;
 
-      // 1. Draw target background (body image)
-      ctx.drawImage(bodyImg, 0, 0);
+# Streamlit UI Setup
+st.set_page_config(page_title="Simple Face Swap App", layout="centered")
+st.title("Simple Face Swap App")
+st.write(
+    "Upload a **Face Image** and a **Body/Outfit Image** to swap the face locally."
+)
 
-      // 2. Extract bounding box and landmarks
-      const srcBox = faceResult.detection.box;
-      const tgtBox = bodyResult.detection.box;
+col1, col2 = st.columns(2)
 
-      // 3. Create off-screen canvas to extract and clip source face
-      const offCanvas = document.createElement('canvas');
-      offCanvas.width = srcBox.width;
-      offCanvas.height = srcBox.height;
-      const offCtx = offCanvas.getContext('2d');
+with col1:
+    st.subheader("1. Source Face")
+    face_file = st.file_uploader(
+        "Upload Face", type=["jpg", "jpeg", "png"], key="face"
+    )
+    if face_file:
+        st.image(face_file, use_container_width=True)
 
-      // Draw source face portion to off-screen canvas
-      offCtx.drawImage(
-        faceImg, 
-        srcBox.x, srcBox.y, srcBox.width, srcBox.height, 
-        0, 0, srcBox.width, srcBox.height
-      );
+with col2:
+    st.subheader("2. Target Body")
+    body_file = st.file_uploader(
+        "Upload Body", type=["jpg", "jpeg", "png"], key="body"
+    )
+    if body_file:
+        st.image(body_file, use_container_width=True)
 
-      // 4. Blend and warp onto target bounding area
-      ctx.save();
-      
-      // Feathered oval mask for seamless blending
-      ctx.beginPath();
-      const centerX = tgtBox.x + tgtBox.width / 2;
-      const centerY = tgtBox.y + tgtBox.height / 2;
-      const radiusX = tgtBox.width / 2;
-      const radiusY = tgtBox.height / 1.8;
-      ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
-      ctx.clip();
+if st.button("Swap Face", type="primary"):
+    if face_file is not None and body_file is not None:
+        # Convert uploaded bytes to OpenCV image format (BGR)
+        face_bytes = np.asarray(bytearray(face_file.read()), dtype=np.uint8)
+        body_bytes = np.asarray(bytearray(body_file.read()), dtype=np.uint8)
 
-      // Overlay swapped face
-      ctx.drawImage(offCanvas, tgtBox.x, tgtBox.y, tgtBox.width, tgtBox.height);
-      ctx.restore();
+        src_img = cv2.imdecode(face_bytes, cv2.IMREAD_COLOR)
+        tgt_img = cv2.imdecode(body_bytes, cv2.IMREAD_COLOR)
 
-      swapBtn.innerText = "Swap Face onto Body";
-    });
-  </script>
-</body>
-</html>
+        result = swap_faces(src_img, tgt_img)
+
+        if result is not None:
+            # Convert BGR back to RGB for Streamlit rendering
+            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+            st.success("Face Swapped Successfully!")
+            st.image(
+                result_rgb, caption="Result Image", use_container_width=True
+            )
+        else:
+            st.error(
+                "Could not detect faces clearly in one or both images. Try clearer front-facing photos."
+            )
+    else:
+        st.warning("Please upload both images before clicking Swap.")
