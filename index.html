@@ -3,117 +3,149 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Image Upload Preview</title>
+  <title>Pure JS Client-Side Face Swap</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
-    body { padding: 2rem; background: #0f172a; color: #f8fafc; }
+    body { background: #0f172a; color: #f8fafc; padding: 2rem; }
+    .container { max-width: 900px; margin: 0 auto; background: #1e293b; padding: 1.5rem; border-radius: 12px; }
+    h1 { margin-bottom: 1rem; text-align: center; }
     
-    .container { max-width: 600px; margin: 0 auto; background: #1e293b; padding: 1.5rem; border-radius: 12px; }
-    
-    .drop-zone {
-      border: 2px dashed #3b82f6;
-      border-radius: 8px;
-      padding: 2rem;
-      text-align: center;
-      cursor: pointer;
-      background: #0f172a;
-      transition: background 0.2s ease;
-    }
-    .drop-zone:hover { background: #1e293b; }
-    
-    input[type="file"] { display: none; }
-    
-    .preview-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-      gap: 10px;
-      margin-top: 1rem;
-    }
-    .preview-grid img {
-      width: 100%;
-      height: 100px;
-      object-fit: cover;
-      border-radius: 6px;
-    }
-    
-    button {
-      margin-top: 1rem;
-      width: 100%;
-      padding: 0.75rem;
-      background: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      font-weight: bold;
-      cursor: pointer;
-    }
+    .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .box { border: 2px dashed #3b82f6; border-radius: 8px; padding: 1rem; text-align: center; background: #0f172a; }
+    .box input { display: none; }
+    .box label { cursor: pointer; display: block; font-weight: bold; padding: 0.5rem; }
+    .preview { max-width: 100%; max-height: 200px; margin-top: 0.5rem; border-radius: 6px; display: none; }
+
+    button { width: 100%; padding: 0.8rem; background: #2563eb; color: white; border: none; border-radius: 6px; font-size: 1rem; font-weight: bold; cursor: pointer; }
     button:hover { background: #1d4ed8; }
+
+    .result-container { margin-top: 1.5rem; text-align: center; }
+    canvas { max-width: 100%; border-radius: 8px; background: #000; margin-top: 1rem; }
   </style>
+  
+  <!-- Load TensorFlow.js and Face-API.js directly from CDN -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 </head>
 <body>
 
   <div class="container">
-    <h2>Upload Images</h2>
-    
-    <label for="fileInput" class="drop-zone" id="dropZone">
-      <p>Click or Drag & Drop images here</p>
-      <input type="file" id="fileInput" accept="image/*" multiple />
-    </label>
+    <h1>Client-Side Face Swap</h1>
 
-    <div class="preview-grid" id="previewGrid"></div>
+    <div class="upload-grid">
+      <div class="box">
+        <label for="faceInput">1. Upload Face Image</label>
+        <input type="file" id="faceInput" accept="image/*" />
+        <img id="faceImg" class="preview" alt="Face Preview" />
+      </div>
 
-    <button id="uploadBtn">Upload</button>
+      <div class="box">
+        <label for="bodyInput">2. Upload Body/Clothing Image</label>
+        <input type="file" id="bodyInput" accept="image/*" />
+        <img id="bodyImg" class="preview" alt="Body Preview" />
+      </div>
+    </div>
+
+    <button id="swapBtn">Swap Face onto Body</button>
+
+    <div class="result-container">
+      <h3>Result:</h3>
+      <canvas id="outputCanvas"></canvas>
+    </div>
   </div>
 
-  <script type="module">
-    // Optional Stream.io import if using NPM modules/bundlers:
-    // import { connect } from 'getstream';
+  <script>
+    const faceInput = document.getElementById('faceInput');
+    const bodyInput = document.getElementById('bodyInput');
+    const faceImg = document.getElementById('faceImg');
+    const bodyImg = document.getElementById('bodyImg');
+    const swapBtn = document.getElementById('swapBtn');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
 
-    const fileInput = document.getElementById('fileInput');
-    const previewGrid = document.getElementById('previewGrid');
-    const uploadBtn = document.getElementById('uploadBtn');
-
-    let selectedFiles = [];
-
-    // Local Preview Functionality
-    fileInput.addEventListener('change', (e) => {
-      const files = Array.from(e.target.files);
-      selectedFiles.push(...files);
-      renderPreviews();
-    });
-
-    function renderPreviews() {
-      previewGrid.innerHTML = '';
-      selectedFiles.forEach((file) => {
-        const img = document.createElement('img');
-        img.src = URL.createObjectURL(file);
-        previewGrid.appendChild(img);
+    // Handle local image previews
+    function setupPreview(input, imgElement) {
+      input.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+          imgElement.src = URL.createObjectURL(file);
+          imgElement.style.display = 'block';
+        }
       });
     }
 
-    // Handlers for Stream.io Upload logic
-    uploadBtn.addEventListener('click', async () => {
-      if (selectedFiles.length === 0) {
-        alert("Please select an image first!");
+    setupPreview(faceInput, faceImg);
+    setupPreview(bodyInput, bodyImg);
+
+    // Initialize models from CDN
+    async function loadModels() {
+      const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark64Net.loadFromUri(MODEL_URL);
+    }
+
+    loadModels();
+
+    // Perform geometric face swap onto target canvas
+    swapBtn.addEventListener('click', async () => {
+      if (!faceImg.src || !bodyImg.src) {
+        alert("Please upload both a face image and a body image first!");
         return;
       }
 
-      console.log("Selected files ready to upload:", selectedFiles);
+      swapBtn.innerText = "Processing...";
 
-      /* 
-         Stream.io API Integration Pattern:
-         ----------------------------------
-         // 1. Initialize Stream Client (requires user token from your backend)
-         // const client = connect('YOUR_API_KEY', userToken, 'YOUR_APP_ID');
+      // Detect face and landmarks on source (Face Image)
+      const faceResult = await faceapi.detectSingleFace(faceImg, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
+      // Detect face and landmarks on target (Body Image)
+      const bodyResult = await faceapi.detectSingleFace(bodyImg, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks();
 
-         // 2. Upload file to Stream CDN
-         // for (let file of selectedFiles) {
-         //   const response = await client.uploadImage({ file });
-         //   console.log('Uploaded image URL:', response.file);
-         // }
-      */
+      if (!faceResult || !bodyResult) {
+        alert("Could not detect clear faces in one or both images. Try clearer photos.");
+        swapBtn.innerText = "Swap Face onto Body";
+        return;
+      }
 
-      alert(`Ready to upload ${selectedFiles.length} file(s)!`);
+      // Set canvas dimensions to target body image dimensions
+      canvas.width = bodyImg.naturalWidth;
+      canvas.height = bodyImg.naturalHeight;
+
+      // 1. Draw target background (body image)
+      ctx.drawImage(bodyImg, 0, 0);
+
+      // 2. Extract bounding box and landmarks
+      const srcBox = faceResult.detection.box;
+      const tgtBox = bodyResult.detection.box;
+
+      // 3. Create off-screen canvas to extract and clip source face
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = srcBox.width;
+      offCanvas.height = srcBox.height;
+      const offCtx = offCanvas.getContext('2d');
+
+      // Draw source face portion to off-screen canvas
+      offCtx.drawImage(
+        faceImg, 
+        srcBox.x, srcBox.y, srcBox.width, srcBox.height, 
+        0, 0, srcBox.width, srcBox.height
+      );
+
+      // 4. Blend and warp onto target bounding area
+      ctx.save();
+      
+      // Feathered oval mask for seamless blending
+      ctx.beginPath();
+      const centerX = tgtBox.x + tgtBox.width / 2;
+      const centerY = tgtBox.y + tgtBox.height / 2;
+      const radiusX = tgtBox.width / 2;
+      const radiusY = tgtBox.height / 1.8;
+      ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+      ctx.clip();
+
+      // Overlay swapped face
+      ctx.drawImage(offCanvas, tgtBox.x, tgtBox.y, tgtBox.width, tgtBox.height);
+      ctx.restore();
+
+      swapBtn.innerText = "Swap Face onto Body";
     });
   </script>
 </body>
